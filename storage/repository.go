@@ -29,28 +29,70 @@ func (r *Repository) RecordByID(id string) (domain.ConversionRecord, error) {
 	return record, r.store.read(bucketRecords, id, &record)
 }
 
-func (r *Repository) RecordByKey(key string) (domain.ConversionRecord, bool, error) {
-	var records []domain.ConversionRecord
-	err := r.store.db.View(func(tx *bolt.Tx) error {
-		return tx.Bucket([]byte(bucketRecords)).ForEach(func(_, value []byte) error {
-			var record domain.ConversionRecord
-			if err := decode(value, &record); err != nil {
-				return err
-			}
-			if record.IdempotencyKey == key {
-				records = append(records, record)
-			}
+// firstRecordByKey returns the record with the smallest sequence that carries
+// the given idempotency key, scanning within the provided transaction.
+func firstRecordByKey(tx *bolt.Tx, key string) (domain.ConversionRecord, bool, error) {
+	var match domain.ConversionRecord
+	found := false
+	err := tx.Bucket([]byte(bucketRecords)).ForEach(func(_, value []byte) error {
+		var record domain.ConversionRecord
+		if err := decode(value, &record); err != nil {
+			return err
+		}
+		if record.IdempotencyKey != key {
 			return nil
-		})
+		}
+		if !found || record.Sequence < match.Sequence {
+			match = record
+			found = true
+		}
+		return nil
+	})
+	return match, found, err
+}
+
+func (r *Repository) RecordByKey(key string) (domain.ConversionRecord, bool, error) {
+	var record domain.ConversionRecord
+	var found bool
+	err := r.store.db.View(func(tx *bolt.Tx) error {
+		var err error
+		record, found, err = firstRecordByKey(tx, key)
+		return err
 	})
 	if err != nil {
 		return domain.ConversionRecord{}, false, err
 	}
-	if len(records) == 0 {
-		return domain.ConversionRecord{}, false, nil
-	}
-	sort.Slice(records, func(i, j int) bool { return records[i].Sequence < records[j].Sequence })
-	return records[0], true, nil
+	return record, found, nil
+}
+
+// SaveRecordIfAbsent persists record unless a record with the same idempotency
+// key already exists, in which case that existing record is returned instead.
+// The lookup and the write run in a single transaction so that concurrent
+// submissions sharing a key cannot both create records.
+func (r *Repository) SaveRecordIfAbsent(record domain.ConversionRecord) (domain.ConversionRecord, bool, error) {
+	var stored domain.ConversionRecord
+	created := false
+	err := r.store.db.Update(func(tx *bolt.Tx) error {
+		existing, found, err := firstRecordByKey(tx, record.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		if found {
+			stored = existing
+			return nil
+		}
+		data, err := encode(record)
+		if err != nil {
+			return err
+		}
+		if err := tx.Bucket([]byte(bucketRecords)).Put([]byte(record.ID), data); err != nil {
+			return err
+		}
+		stored = record
+		created = true
+		return nil
+	})
+	return stored, created, err
 }
 
 func (r *Repository) ListRecords() ([]domain.ConversionRecord, error) {

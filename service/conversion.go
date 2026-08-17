@@ -43,6 +43,16 @@ func (s *ConversionService) Convert(ctx context.Context, request domain.Conversi
 	if err := request.Validate(); err != nil {
 		return domain.ConversionRecord{}, err
 	}
+	// Idempotency: a repeated request with the same key returns the stored
+	// result without re-executing the conversion flow. Dry runs are pure
+	// previews and are not persisted, so they are not deduplicated.
+	if !request.DryRun {
+		if existing, ok, err := s.repo.RecordByKey(request.IdempotencyKey); err != nil {
+			return domain.ConversionRecord{}, err
+		} else if ok {
+			return existing, nil
+		}
+	}
 	preview, err := s.Preview(ctx, request)
 	if err != nil {
 		return domain.ConversionRecord{}, err
@@ -65,8 +75,13 @@ func (s *ConversionService) Convert(ctx context.Context, request domain.Conversi
 		record.Status = "preview"
 		return record, nil
 	}
-	if err := s.repo.SaveRecord(record); err != nil {
+	stored, created, err := s.repo.SaveRecordIfAbsent(record)
+	if err != nil {
 		return domain.ConversionRecord{}, err
+	}
+	if !created {
+		// A concurrent submission with this key completed first; reuse its result.
+		return stored, nil
 	}
 	if err := s.repo.SaveEntities(request); err != nil {
 		return domain.ConversionRecord{}, err
