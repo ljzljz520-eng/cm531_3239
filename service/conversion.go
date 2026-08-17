@@ -43,6 +43,15 @@ func (s *ConversionService) Convert(ctx context.Context, request domain.Conversi
 	if err := request.Validate(); err != nil {
 		return domain.ConversionRecord{}, err
 	}
+	if !request.DryRun {
+		record, found, err := s.repo.RecordByKey(request.IdempotencyKey)
+		if err != nil {
+			return domain.ConversionRecord{}, err
+		}
+		if found {
+			return record, nil
+		}
+	}
 	preview, err := s.Preview(ctx, request)
 	if err != nil {
 		return domain.ConversionRecord{}, err
