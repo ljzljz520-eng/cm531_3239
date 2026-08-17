@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "metrics": {
+    "production_loc": 2370,
+    "production_files": 25,
+    "production_packages": 7,
+    "test_files": 9,
+    "production_functions": 117,
+    "decision_points": 277
+  },
+  "persistence": {
+    "module": "go.etcd.io/bbolt",
+    "entities": [
+      "WorkOrder",
+      "Equipment",
+      "QualityInspection",
+      "Material"
+    ],
+    "reopen_test": "TestPersistenceSurvivesReopen"
+  },
+  "workflows": [
+    {
+      "steps": [
+        "validate source catalog",
+        "preview mapped DDL",
+        "confirm conversion execution",
+        "persist record and append audit timeline"
+      ],
+      "test": "TestWorkflowPreviewExecuteAudit"
+    },
+    {
+      "steps": [
+        "submit controlled batch requests",
+        "run conversion workers",
+        "persist batch completion",
+        "query completed conversion records"
+      ],
+      "test": "TestWorkflowBatchPersistQuery"
+    },
+    {
+      "steps": [
+        "execute MES structure conversion",
+        "create history download",
+        "close embedded bbolt store",
+        "reopen and query persisted entities"
+      ],
+      "test": "TestWorkflowExecuteDownloadReopen"
+    }
+  ]
+}
